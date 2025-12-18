@@ -31,8 +31,8 @@ A **privacy-focused voice assistant** with **sub-300ms latency**, built using Wh
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/voice-assistant.git
-cd voice-assistant
+git clone https://github.com/yourusername/Low-Latency_Voice-Assistant.git
+cd Low-Latency_Voice-Assistant
 
 # Setup Backend
 cd backend
