@@ -1,0 +1,20 @@
+venv/
+node_modules/
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+
+# ML / HuggingFace models
+backend/models/
+*.bin
+*.pt
+*.onnx
+
+# OS
+.DS_Store
+.env
+
