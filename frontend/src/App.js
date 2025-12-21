@@ -26,7 +26,7 @@ const VoiceAssistant = () => {
 
       const wsUrl = 'ws://localhost:8000/ws/audio';
       console.log('Connecting to:', wsUrl);
-      
+
       try {
         socketRef.current = new WebSocket(wsUrl);
 
@@ -40,15 +40,15 @@ const VoiceAssistant = () => {
 
         socketRef.current.onmessage = (event) => {
           if (!mounted) return;
-          
+
           try {
             const data = JSON.parse(event.data);
-            
-            switch(data.type) {
+
+            switch (data.type) {
               case 'status':
                 setStatus(data.message);
                 break;
-              
+
               case 'transcript':
                 setTranscript(data.text);
                 setResponse('');
@@ -56,18 +56,18 @@ const VoiceAssistant = () => {
                   setLatencyMetrics(prev => ({ ...prev, asr: Math.round(data.latency) }));
                 }
                 break;
-              
+
               case 'latency_stats':
                 setLatencyMetrics({
                   asr: Math.round(data.asr),
                   ttft: Math.round(data.ttft)
                 });
                 break;
-              
+
               case 'token':
                 setResponse(prev => prev + data.text);
                 break;
-              
+
               case 'error':
                 setError(data.message);
                 console.error('Backend error:', data.message);
@@ -85,20 +85,20 @@ const VoiceAssistant = () => {
 
         socketRef.current.onclose = () => {
           if (!mounted) return;
-          
+
           setStatus('disconnected');
           console.log('✗ Disconnected from backend');
-          
+
           // Auto-reconnect with exponential backoff
           setConnectionAttempts(prev => {
             const attempts = prev + 1;
             const delay = Math.min(1000 * Math.pow(2, attempts), 10000);
             console.log(`Reconnecting in ${delay}ms... (attempt ${attempts})`);
-            
+
             reconnectTimeoutRef.current = setTimeout(() => {
               if (mounted) connect();
             }, delay);
-            
+
             return attempts;
           });
         };
@@ -140,53 +140,58 @@ const VoiceAssistant = () => {
       });
 
       // Request microphone access
-      const stream = await navigator.mediaDevices.getUserMedia({ 
+      const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
           sampleRate: 16000
-        } 
+        }
       });
       streamRef.current = stream;
 
       const source = audioContextRef.current.createMediaStreamSource(stream);
-      
-      // Use ScriptProcessor for audio processing
-      const processor = audioContextRef.current.createScriptProcessor(4096, 1, 1);
-      processorRef.current = processor;
 
-      source.connect(processor);
-      processor.connect(audioContextRef.current.destination);
+      try {
+        // Load the AudioWorklet module
+        await audioContextRef.current.audioWorklet.addModule('/audioProcessor.js');
 
-      processor.onaudioprocess = (e) => {
-        if (!isListening) return;
-        
-        const inputData = e.inputBuffer.getChannelData(0);
-        
-        // Calculate audio level for visualization
-        const sum = inputData.reduce((a, b) => a + Math.abs(b), 0);
-        const avgLevel = sum / inputData.length;
-        setAudioLevel(Math.min(100, avgLevel * 100 * 3));
+        // Create AudioWorkletNode
+        const workletNode = new AudioWorkletNode(audioContextRef.current, 'audio-processor');
+        processorRef.current = workletNode;
 
-        // Send audio to backend if connected
-        if (socketRef.current?.readyState === WebSocket.OPEN) {
-          // Convert Float32 (-1 to 1) to Int16 (-32768 to 32767)
-          const pcmData = new Int16Array(inputData.length);
-          for (let i = 0; i < inputData.length; i++) {
-            const s = Math.max(-1, Math.min(1, inputData[i]));
-            pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+        // Handle messages from the worklet (audio data and volume)
+        workletNode.port.onmessage = (event) => {
+          if (!isListening) return;
+
+          const { type, buffer, volume } = event.data;
+
+          if (type === 'audio_data') {
+            // Update volume visualization
+            setAudioLevel(volume);
+
+            // Send audio to backend if connected
+            if (socketRef.current?.readyState === WebSocket.OPEN) {
+              try {
+                // Buffer is already Int16 from the worklet
+                socketRef.current.send(buffer);
+              } catch (err) {
+                console.error('Error sending audio:', err);
+              }
+            }
           }
-          
-          try {
-            socketRef.current.send(pcmData.buffer);
-          } catch (err) {
-            console.error('Error sending audio:', err);
-          }
-        }
-      };
+        };
 
-      console.log('✓ Recording started');
+        source.connect(workletNode);
+        workletNode.connect(audioContextRef.current.destination); // Keep node alive
+
+        console.log('✓ Recording started with AudioWorklet');
+      } catch (err) {
+        console.error('AudioWorklet error:', err);
+        setError(`AudioWorklet failed: ${err.message}. Fallback to basic recording not implemented.`);
+        setIsListening(false);
+      }
+
     } catch (err) {
       console.error('Microphone error:', err);
       setError(`Microphone error: ${err.message}`);
@@ -198,17 +203,17 @@ const VoiceAssistant = () => {
     console.log('✓ Recording stopped');
     setIsListening(false);
     setAudioLevel(0);
-    
+
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
       streamRef.current = null;
     }
-    
+
     if (processorRef.current) {
       processorRef.current.disconnect();
       processorRef.current = null;
     }
-    
+
     if (audioContextRef.current) {
       audioContextRef.current.close();
       audioContextRef.current = null;
@@ -216,36 +221,36 @@ const VoiceAssistant = () => {
   };
 
   const getStatusConfig = () => {
-    switch(status) {
+    switch (status) {
       case 'disconnected':
-        return { 
-          color: 'red', 
-          bg: 'bg-red-900/20', 
-          border: 'border-red-900', 
+        return {
+          color: 'red',
+          bg: 'bg-red-900/20',
+          border: 'border-red-900',
           text: 'text-red-400',
           glow: 'bg-red-500'
         };
       case 'listening':
-        return { 
-          color: 'green', 
-          bg: 'bg-green-900/20', 
-          border: 'border-green-900', 
+        return {
+          color: 'green',
+          bg: 'bg-green-900/20',
+          border: 'border-green-900',
           text: 'text-green-400',
           glow: 'bg-green-500'
         };
       case 'processing':
-        return { 
-          color: 'yellow', 
-          bg: 'bg-yellow-900/20', 
-          border: 'border-yellow-900', 
+        return {
+          color: 'yellow',
+          bg: 'bg-yellow-900/20',
+          border: 'border-yellow-900',
           text: 'text-yellow-400',
           glow: 'bg-yellow-500'
         };
       default:
-        return { 
-          color: 'blue', 
-          bg: 'bg-slate-800', 
-          border: 'border-slate-700', 
+        return {
+          color: 'blue',
+          bg: 'bg-slate-800',
+          border: 'border-slate-700',
           text: 'text-slate-400',
           glow: 'bg-blue-500'
         };
@@ -257,7 +262,7 @@ const VoiceAssistant = () => {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white p-6">
       <div className="max-w-4xl mx-auto space-y-6">
-        
+
         {/* Header */}
         <div className="text-center space-y-3">
           <h1 className="text-4xl font-bold bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-500 bg-clip-text text-transparent">
@@ -273,7 +278,7 @@ const VoiceAssistant = () => {
               WebSocket Stream
             </span> */}
             <span className={`flex items-center gap-2 ${status === 'disconnected' ? 'text-red-400' : 'text-green-400'}`}>
-              {status === 'disconnected' ? <WifiOff className="w-4 h-4"/> : <Wifi className="w-4 h-4"/>}
+              {status === 'disconnected' ? <WifiOff className="w-4 h-4" /> : <Wifi className="w-4 h-4" />}
               {status === 'disconnected' ? 'Offline' : 'Connected'}
             </span>
           </div>
@@ -296,34 +301,33 @@ const VoiceAssistant = () => {
         <div className="relative flex justify-center py-12">
           {/* Glow effect */}
           <div className={`absolute inset-0 rounded-full blur-3xl opacity-20 transition-colors duration-500 ${statusConfig.glow}`}></div>
-          
+
           {/* Microphone button */}
           <button
             onClick={isListening ? stopRecording : startRecording}
             disabled={status === 'disconnected'}
-            className={`relative w-40 h-40 rounded-full flex items-center justify-center border-4 transition-all duration-300 shadow-2xl z-10 ${
-              status === 'disconnected' 
+            className={`relative w-40 h-40 rounded-full flex items-center justify-center border-4 transition-all duration-300 shadow-2xl z-10 ${status === 'disconnected'
                 ? 'border-gray-700 bg-gray-800 cursor-not-allowed opacity-50'
-                : isListening 
-                  ? 'border-red-500 bg-red-500/10 hover:bg-red-500/20' 
+                : isListening
+                  ? 'border-red-500 bg-red-500/10 hover:bg-red-500/20'
                   : 'border-slate-700 bg-slate-800 hover:border-blue-500 hover:bg-slate-700'
-            }`}
+              }`}
           >
             {isListening ? (
-              <MicOff className="w-12 h-12 text-red-500"/>
+              <MicOff className="w-12 h-12 text-red-500" />
             ) : (
-              <Mic className="w-12 h-12 text-slate-400"/>
+              <Mic className="w-12 h-12 text-slate-400" />
             )}
           </button>
-          
+
           {/* Audio level visualization */}
           {isListening && (
             <>
-              <div 
+              <div
                 className="absolute w-40 h-40 rounded-full border-2 border-green-500/30 transition-all duration-75 pointer-events-none"
                 style={{ transform: `scale(${1 + audioLevel / 80})` }}
               />
-              <div 
+              <div
                 className="absolute w-40 h-40 rounded-full border border-green-500/20 transition-all duration-100"
                 style={{ transform: `scale(${1 + audioLevel / 60})` }}
               />
@@ -343,28 +347,26 @@ const VoiceAssistant = () => {
         <div className="grid grid-cols-2 gap-4">
           <div className="bg-slate-800/50 backdrop-blur rounded-xl p-4 border border-slate-700">
             <div className="flex items-center gap-2 mb-2">
-              <Activity className="w-4 h-4 text-blue-400"/>
+              <Activity className="w-4 h-4 text-blue-400" />
               <span className="text-xs text-slate-400 uppercase font-semibold">ASR Latency</span>
             </div>
-            <div className={`text-3xl font-mono font-bold ${
-              latencyMetrics.asr === 0 ? 'text-slate-600' :
-              latencyMetrics.asr < 100 ? 'text-green-400' :
-              latencyMetrics.asr < 300 ? 'text-yellow-400' : 'text-red-400'
-            }`}>
+            <div className={`text-3xl font-mono font-bold ${latencyMetrics.asr === 0 ? 'text-slate-600' :
+                latencyMetrics.asr < 100 ? 'text-green-400' :
+                  latencyMetrics.asr < 300 ? 'text-yellow-400' : 'text-red-400'
+              }`}>
               {latencyMetrics.asr} ms
             </div>
           </div>
-          
+
           <div className="bg-slate-800/50 backdrop-blur rounded-xl p-4 border border-slate-700">
             <div className="flex items-center gap-2 mb-2">
-              <Zap className="w-4 h-4 text-purple-400"/>
+              <Zap className="w-4 h-4 text-purple-400" />
               <span className="text-xs text-slate-400 uppercase font-semibold">TTFT</span>
             </div>
-            <div className={`text-3xl font-mono font-bold ${
-              latencyMetrics.ttft === 0 ? 'text-slate-600' :
-              latencyMetrics.ttft < 100 ? 'text-green-400' :
-              latencyMetrics.ttft < 200 ? 'text-yellow-400' : 'text-red-400'
-            }`}>
+            <div className={`text-3xl font-mono font-bold ${latencyMetrics.ttft === 0 ? 'text-slate-600' :
+                latencyMetrics.ttft < 100 ? 'text-green-400' :
+                  latencyMetrics.ttft < 200 ? 'text-yellow-400' : 'text-red-400'
+              }`}>
               {latencyMetrics.ttft} ms
             </div>
           </div>
@@ -374,7 +376,7 @@ const VoiceAssistant = () => {
         <div className="grid gap-4">
           <div className="bg-slate-800/50 backdrop-blur rounded-xl p-5 border border-slate-700 min-h-[100px]">
             <div className="flex items-center gap-2 mb-3">
-              <Mic className="w-4 h-4 text-blue-400"/>
+              <Mic className="w-4 h-4 text-blue-400" />
               <span className="text-xs text-slate-400 uppercase font-bold">You Said</span>
             </div>
             <p className="text-lg leading-relaxed">
@@ -384,7 +386,7 @@ const VoiceAssistant = () => {
 
           <div className="bg-slate-800/50 backdrop-blur rounded-xl p-5 border border-slate-700 min-h-[100px]">
             <div className="flex items-center gap-2 mb-3">
-              <Terminal className="w-4 h-4 text-cyan-400"/>
+              <Terminal className="w-4 h-4 text-cyan-400" />
               <span className="text-xs text-slate-400 uppercase font-bold">Assistant Response</span>
             </div>
             <p className="text-lg text-cyan-100 leading-relaxed">

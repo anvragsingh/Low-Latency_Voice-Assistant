@@ -1,5 +1,4 @@
-venv/
-node_modules/
+
 # Python
 venv/
 __pycache__/
@@ -18,3 +17,4 @@ backend/models/
 .DS_Store
 .env
 
+ 
