@@ -8,3 +8,4 @@ scipy==1.11.4
 llama-cpp-python==0.2.90
 
 colorama==0.4.6
+edge-tts==6.1.9

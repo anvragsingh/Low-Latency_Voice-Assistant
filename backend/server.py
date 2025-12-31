@@ -7,12 +7,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from faster_whisper import WhisperModel
 import os
 import sys
+import edge_tts
+import base64
 
 # --- CONFIGURATION ---
 WHISPER_MODEL_SIZE = "tiny.en"  # Options: tiny.en, base.en, small.en
 VAD_THRESHOLD = 0.01   # Energy threshold for voice activity
 SILENCE_LIMIT = 1.5    # Seconds of silence to trigger processing (reduced from 2.0)
 SAMPLE_RATE = 16000    # Required by Whisper
+TTS_VOICE = "en-US-AriaNeural" # Edge-TTS voice
 
 app = FastAPI()
 
@@ -151,6 +154,11 @@ async def audio_websocket(websocket: WebSocket):
             # --- Simple VAD (Voice Activity Detection) ---
             energy = np.sqrt(np.mean(chunk**2))
             
+            # Debug logging for energy levels
+            if total_chunks % 10 == 0:  # Log every 10th chunk to avoid spam
+                print(f"Energy: {energy:.4f} (Threshold: {VAD_THRESHOLD})")
+
+            
             if energy > VAD_THRESHOLD:
                 if not is_speaking:
                     is_speaking = True
@@ -237,6 +245,25 @@ async def audio_websocket(websocket: WebSocket):
                     await asyncio.sleep(0.05)  # Simulate streaming delay
                 
                 print(f"🤖 Assistant: '{response_text}'")
+
+                # 4. Generate & Stream Audio (TTS)
+                try:
+                    communicate = edge_tts.Communicate(response_text, TTS_VOICE)
+                    audio_chunks = []
+                    async for chunk in communicate.stream():
+                        if chunk["type"] == "audio":
+                            audio_chunks.append(chunk["data"])
+                    
+                    if audio_chunks:
+                        full_audio = b"".join(audio_chunks)
+                        audio_base64 = base64.b64encode(full_audio).decode("utf-8")
+                        await websocket.send_json({
+                            "type": "audio",
+                            "data": audio_base64
+                        })
+                except Exception as e:
+                    print(f"❌ TTS Error: {e}")
+
                 await websocket.send_json({"type": "status", "message": "idle"})
 
     except WebSocketDisconnect:

@@ -68,6 +68,15 @@ const VoiceAssistant = () => {
                 setResponse(prev => prev + data.text);
                 break;
 
+              case 'audio':
+                  try {
+                      const audio = new Audio("data:audio/mp3;base64," + data.data);
+                      audio.play().catch(e => console.error("Audio play error:", e));
+                  } catch (e) {
+                      console.error("Error creating audio:", e);
+                  }
+                  break;
+
               case 'error':
                 setError(data.message);
                 console.error('Backend error:', data.message);
